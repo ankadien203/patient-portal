@@ -17,6 +17,8 @@ import {
   LogOut,
 } from "lucide-react";
 import "./AdminDashboard.css";
+import { useState } from "react";
+import PatientsPage from "./PatientsPage";
 
 const appointments = [
   {
@@ -98,6 +100,8 @@ const statistics = [
 ];
 
 function AdminDashboard() {
+  const [activePage, setActivePage] = useState("overview");
+
   return (
     <div className="admin-layout">
       <aside className="admin-sidebar">
@@ -114,14 +118,22 @@ function AdminDashboard() {
         <div className="sidebar-label">MENU CHÍNH</div>
 
         <nav className="admin-nav">
-          <a href="#overview" className="admin-nav-link active">
-            <LayoutDashboard size={19} />
-            <span>Tổng quan</span>
-          </a>
-          <a href="#patients" className="admin-nav-link">
-            <Users size={19} />
-            <span>Bệnh nhân</span>
-          </a>
+          <button
+  type="button"
+  className={`admin-nav-link ${activePage === "overview" ? "active" : ""}`}
+  onClick={() => setActivePage("overview")}
+>
+  <LayoutDashboard size={19} />
+  <span>Tổng quan</span>
+</button>
+          <button
+  type="button"
+  className={`admin-nav-link ${activePage === "patients" ? "active" : ""}`}
+  onClick={() => setActivePage("patients")}
+>
+  <Users size={19} />
+  <span>Bệnh nhân</span>
+</button>
           <a href="#doctors" className="admin-nav-link">
             <Stethoscope size={19} />
             <span>Bác sĩ</span>
@@ -193,6 +205,10 @@ function AdminDashboard() {
         </header>
 
         <div className="admin-content">
+          {activePage === "patients" ? (
+  <PatientsPage />
+) : (
+  <>
           <section className="welcome-row">
             <div>
               <p className="dashboard-eyebrow">TỔNG QUAN HỆ THỐNG</p>
@@ -347,10 +363,12 @@ function AdminDashboard() {
           </section>
 
           <footer className="admin-footer">
-            © 2026 Patient Portal · Hospital Management System
-          </footer>
-        </div>
-      </main>
+  © 2026 Patient Portal · Hospital Management System
+</footer>
+</>
+)}
+</div>
+</main>
     </div>
   );
 }
