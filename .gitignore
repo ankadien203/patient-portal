@@ -19,3 +19,6 @@ venv/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Database backups
+patient_portal_backup.sql

@@ -1,6 +1,6 @@
 from datetime import date
 from typing import Optional
-
+from auth import require_roles
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
@@ -9,8 +9,14 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models import Patient
+from auth import get_current_user, require_roles
+from models import Patient, User, Doctor, PatientAccount, DoctorPatient
+from fastapi import Depends, FastAPI, HTTPException
+from sqlalchemy.orm import Session
 
+from auth import create_access_token, verify_password
+from models import User
+from schemas import LoginRequest, TokenResponse
 app = FastAPI(title="Patient Portal API")
 
 app.add_middleware(
@@ -117,10 +123,65 @@ def database_health(db: Session = Depends(get_db)):
 # Get patients
 # =========================
 
+
 @app.get("/api/patients", response_model=list[PatientResponse])
-def get_patients(db: Session = Depends(get_db)):
+def get_patients(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     try:
-        return db.query(Patient).order_by(Patient.id.desc()).all()
+        # Admin được xem tất cả bệnh nhân.
+        if current_user.role == "admin":
+            return (
+                db.query(Patient)
+                .order_by(Patient.id.desc())
+                .all()
+            )
+
+        # Bác sĩ chỉ xem bệnh nhân được phân công.
+        if current_user.role == "doctor":
+            doctor = (
+                db.query(Doctor)
+                .filter(Doctor.user_id == current_user.id)
+                .first()
+            )
+
+            if doctor is None:
+                return []
+
+            return (
+                db.query(Patient)
+                .join(
+                    DoctorPatient,
+                    DoctorPatient.patient_id == Patient.id,
+                )
+                .filter(DoctorPatient.doctor_id == doctor.id)
+                .order_by(Patient.id.desc())
+                .all()
+            )
+
+        # Bệnh nhân chỉ xem hồ sơ được liên kết với tài khoản của mình.
+        if current_user.role == "patient":
+            patient_account = (
+                db.query(PatientAccount)
+                .filter(PatientAccount.user_id == current_user.id)
+                .first()
+            )
+
+            if patient_account is None:
+                return []
+
+            return (
+                db.query(Patient)
+                .filter(Patient.id == patient_account.patient_id)
+                .all()
+            )
+
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission to view patients",
+        )
+
     except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=500,
@@ -139,6 +200,7 @@ def get_patients(db: Session = Depends(get_db)):
 )
 def create_patient(
     patient_data: PatientCreate,
+    current_user: User = Depends(require_roles("admin")),
     db: Session = Depends(get_db),
 ):
     validate_patient_data(
@@ -180,6 +242,7 @@ def create_patient(
 def update_patient(
     patient_id: int,
     patient_data: PatientUpdate,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     # Tìm bệnh nhân theo ID
@@ -195,14 +258,50 @@ def update_patient(
             detail="Patient not found",
         )
 
+    # Phân quyền: Admin được cập nhật mọi bệnh nhân
+    # Doctor chỉ được cập nhật bệnh nhân được phân công
+    if current_user.role == "doctor":
+        doctor = (
+            db.query(Doctor)
+            .filter(Doctor.user_id == current_user.id)
+            .first()
+        )
+
+        if doctor is None:
+            raise HTTPException(
+                status_code=403,
+                detail="Doctor profile not found",
+            )
+
+        assignment = (
+            db.query(DoctorPatient)
+            .filter(
+                DoctorPatient.doctor_id == doctor.id,
+                DoctorPatient.patient_id == patient_id,
+            )
+            .first()
+        )
+
+        if assignment is None:
+            raise HTTPException(
+                status_code=403,
+                detail="You can only update patients assigned to you",
+            )
+
+    elif current_user.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission to update patients",
+        )
+
     # Kiểm tra dữ liệu đầu vào
     validate_patient_data(
         patient_data.gender,
         patient_data.status,
     )
 
-    # Cập nhật các trường được phép
-    update_data = patient_data.model_dump()
+    # Chỉ cập nhật các trường được gửi lên
+    update_data = patient_data.model_dump(exclude_unset=True)
 
     try:
         for field, value in update_data.items():
@@ -219,10 +318,10 @@ def update_patient(
             status_code=500,
             detail="Failed to update patient",
         ) from exc
-
 @app.delete("/api/patients/{patient_id}")
 def delete_patient(
     patient_id: int,
+    current_user: User = Depends(require_roles("admin")),
     db: Session = Depends(get_db),
 ):
     patient = db.query(Patient).filter(
@@ -250,3 +349,41 @@ def delete_patient(
             status_code=500,
             detail="Failed to delete patient",
         ) from exc
+# =========================
+# Authentication
+# =========================
+
+@app.post("/api/auth/login", response_model=TokenResponse)
+def login(
+    login_data: LoginRequest,
+    db: Session = Depends(get_db),
+):
+    user = (
+        db.query(User)
+        .filter(User.username == login_data.username)
+        .first()
+    )
+
+    # Dùng cùng một thông báo để tránh tiết lộ username có tồn tại hay không.
+    if user is None or not verify_password(
+        login_data.password,
+        user.password_hash,
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=403,
+            detail="Account is disabled",
+        )
+
+    token = create_access_token(
+        subject=str(user.id),
+        role=user.role,
+    )
+
+    return TokenResponse(access_token=token)
