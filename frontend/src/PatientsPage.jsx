@@ -225,17 +225,46 @@ async function savePatient(event) {
   }
 }
 
-  function deletePatient(patient) {
-    const confirmed = window.confirm(
-      `Bạn có chắc muốn xóa bệnh nhân ${patient.name}?`
-    );
 
-    if (confirmed) {
-      alert(
-        "API xóa bệnh nhân chưa được xây dựng ở backend. Chưa có dữ liệu nào bị xóa khỏi database."
+async function deletePatient(patient) {
+  const confirmed = window.confirm(
+    `Bạn có chắc muốn xóa bệnh nhân ${patient.name} (${patient.id}) không?`
+  );
+
+  if (!confirmed) return;
+
+  try {
+    const response = await fetch(`/api/patients/${patient.dbId}`, {
+      method: "DELETE",
+    });
+
+    const result = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(
+        result.detail || `Không thể xóa bệnh nhân (HTTP ${response.status}).`
       );
     }
+
+    // Xóa thành công thì tải lại danh sách từ database.
+    await loadPatients();
+
+    // Nếu bệnh nhân vừa xóa đang được mở ở cửa sổ chi tiết, đóng cửa sổ.
+    if (selectedPatient?.dbId === patient.dbId) {
+      setSelectedPatient(null);
+    }
+
+    // Nếu bệnh nhân vừa xóa đang được sửa, đóng form sửa.
+    if (editingPatient?.dbId === patient.dbId) {
+      closeForm();
+    }
+
+    alert("Xóa bệnh nhân thành công.");
+  } catch (err) {
+    console.error("Lỗi xóa bệnh nhân:", err);
+    alert(err.message || "Không thể xóa bệnh nhân. Vui lòng thử lại.");
   }
+}
 
   function openEditForm(patient) {
     setEditingPatient(patient);
