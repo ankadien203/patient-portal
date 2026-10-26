@@ -9,6 +9,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     text,
+    Time,
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -168,4 +169,55 @@ class DoctorPatient(Base):
             "patient_id",
             name="uq_doctor_patient",
         ),
+    )
+class Appointment(Base):
+    __tablename__ = "appointments"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+
+    patient_id = Column(
+        Integer,
+        ForeignKey("patients.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    doctor_id = Column(
+        Integer,
+        ForeignKey("doctors.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    appointment_date = Column(Date, nullable=False, index=True)
+    appointment_time = Column(Time, nullable=False)
+
+    reason = Column(Text, nullable=True)
+    notes = Column(Text, nullable=True)
+
+    status = Column(
+        Enum(
+            "Pending",
+            "Confirmed",
+            "Completed",
+            "Cancelled",
+            "Rejected",
+            name="appointment_status",
+        ),
+        nullable=False,
+        server_default=text("'Pending'"),
+        index=True,
+    )
+
+    created_at = Column(
+        DateTime,
+        nullable=False,
+        server_default=func.current_timestamp(),
+    )
+
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        server_default=func.current_timestamp(),
+        onupdate=func.current_timestamp(),
     )

@@ -88,7 +88,14 @@ function PatientsPage() {
     setError("");
 
     try {
-      const response = await fetch("/api/patients");
+      const token = sessionStorage.getItem("access_token");
+
+const response = await fetch("/api/patients", {
+  method: "GET",
+  headers: {
+    Authorization: `Bearer ${token}`,
+  },
+});
 
       if (!response.ok) {
         throw new Error(`Không thể tải danh sách bệnh nhân (HTTP ${response.status}).`);
@@ -177,17 +184,24 @@ async function savePatient(event) {
       ? `/api/patients/${editingPatient.dbId}`
       : "/api/patients";
 
-    const response = await fetch(url, {
-      method: isEditing ? "PUT" : "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(
-        isEditing
-          ? (({ patient_code, ...updateData }) => updateData)(patientData)
-          : patientData
-      ),
-    });
+    const token = sessionStorage.getItem("access_token");
+
+if (!token) {
+  throw new Error("Bạn chưa đăng nhập hoặc phiên đăng nhập đã hết hạn.");
+}
+
+const response = await fetch(url, {
+  method: isEditing ? "PUT" : "POST",
+  headers: {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${token}`,
+  },
+  body: JSON.stringify(
+    isEditing
+      ? (({ patient_code, ...updateData }) => updateData)(patientData)
+      : patientData
+  ),
+});
 
     const result = await response.json().catch(() => ({}));
 
@@ -234,9 +248,19 @@ async function deletePatient(patient) {
   if (!confirmed) return;
 
   try {
-    const response = await fetch(`/api/patients/${patient.dbId}`, {
-      method: "DELETE",
-    });
+    const token = sessionStorage.getItem("access_token");
+
+if (!token) {
+  alert("Bạn chưa đăng nhập hoặc phiên đăng nhập đã hết hạn.");
+  return;
+}
+
+const response = await fetch(`/api/patients/${patient.dbId}`, {
+  method: "DELETE",
+  headers: {
+    Authorization: `Bearer ${token}`,
+  },
+});
 
     const result = await response.json().catch(() => ({}));
 

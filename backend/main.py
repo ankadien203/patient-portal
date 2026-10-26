@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, time, datetime
 from typing import Optional
 from auth import require_roles
 from fastapi import Depends, FastAPI, HTTPException
@@ -10,11 +10,11 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from auth import get_current_user, require_roles
-from models import Patient, User, Doctor, PatientAccount, DoctorPatient
+from models import Patient, User, Doctor, PatientAccount, DoctorPatient, Appointment
 from fastapi import Depends, FastAPI, HTTPException
 from sqlalchemy.orm import Session
 
-from auth import create_access_token, verify_password
+from auth import create_access_token, verify_password, hash_password
 from models import User
 from schemas import LoginRequest, TokenResponse
 app = FastAPI(title="Patient Portal API")
@@ -34,7 +34,59 @@ app.add_middleware(
 # =========================
 # Pydantic schemas
 # =========================
+from pydantic import EmailStr, Field, field_validator
+class DoctorCreate(BaseModel):
+    username: str = Field(min_length=3, max_length=50)
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=128)
 
+    full_name: str = Field(min_length=1, max_length=100)
+    specialization: Optional[str] = Field(default=None, max_length=100)
+    license_number: Optional[str] = Field(default=None, max_length=50)
+    phone: Optional[str] = Field(default=None, max_length=20)
+    department: Optional[str] = Field(default=None, max_length=100)
+
+    @field_validator("username", "full_name")
+    @classmethod
+    def validate_not_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("This field cannot be blank")
+        return value
+class DoctorUpdate(BaseModel):
+    full_name: str = Field(min_length=1, max_length=100)
+    email: EmailStr
+    specialization: Optional[str] = Field(default=None, max_length=100)
+    license_number: Optional[str] = Field(default=None, max_length=50)
+    phone: Optional[str] = Field(default=None, max_length=20)
+    department: Optional[str] = Field(default=None, max_length=100)
+
+    @field_validator("full_name")
+    @classmethod
+    def validate_full_name_not_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Full name cannot be blank")
+        return value
+
+
+class PatientRegister(BaseModel):
+    username: str = Field(min_length=3, max_length=50)
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=128)
+    full_name: str = Field(min_length=1, max_length=100)
+    date_of_birth: Optional[date] = None
+    phone: Optional[str] = Field(default=None, max_length=20)
+    gender: Optional[str] = None
+    address: Optional[str] = Field(default=None, max_length=255)
+
+    @field_validator("username", "full_name")
+    @classmethod
+    def validate_not_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("This field cannot be blank")
+        return value
 class PatientResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -387,3 +439,690 @@ def login(
     )
 
     return TokenResponse(access_token=token)
+# =========================
+# Patient registration
+# =========================
+
+@app.post("/api/auth/register", status_code=201)
+def register_patient(
+    register_data: PatientRegister,
+    db: Session = Depends(get_db),
+):
+    username = register_data.username.strip()
+    email = str(register_data.email).strip().lower()
+
+    # 1. Kiểm tra username đã tồn tại
+    existing_username = (
+        db.query(User)
+        .filter(User.username == username)
+        .first()
+    )
+
+    if existing_username:
+        raise HTTPException(
+            status_code=409,
+            detail="Username already exists",
+        )
+
+    # 2. Kiểm tra email đã tồn tại
+    existing_email = (
+        db.query(User)
+        .filter(User.email == email)
+        .first()
+    )
+
+    if existing_email:
+        raise HTTPException(
+            status_code=409,
+            detail="Email already exists",
+        )
+
+    try:
+        # 3. Tạo tài khoản bệnh nhân
+        user = User(
+            username=username,
+            email=email,
+            password_hash=hash_password(register_data.password),
+            role="patient",
+            is_active=1,
+        )
+
+        db.add(user)
+        db.flush()
+
+        # 4. Tạo mã bệnh nhân duy nhất
+        patient_code = f"PAT{user.id:06d}"
+
+        patient = Patient(
+            patient_code=patient_code,
+            full_name=register_data.full_name.strip(),
+            date_of_birth=register_data.date_of_birth,
+            gender=register_data.gender,
+            phone=register_data.phone,
+            email=email,
+            address=register_data.address,
+            status="Waiting",
+        )
+
+        db.add(patient)
+        db.flush()
+
+        # 5. Liên kết tài khoản và hồ sơ bệnh nhân
+        patient_account = PatientAccount(
+            user_id=user.id,
+            patient_id=patient.id,
+        )
+
+        db.add(patient_account)
+
+        # 6. Lưu tất cả trong cùng một transaction
+        db.commit()
+
+        return {
+            "message": "Registration successful",
+            "username": user.username,
+            "role": user.role,
+            "patient_id": patient.id,
+        }
+
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to register patient",
+        ) from exc
+@app.get("/api/doctors")
+def get_doctors(
+    current_user: User = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+):
+    try:
+        doctors = (
+            db.query(Doctor, User)
+            .join(User, Doctor.user_id == User.id)
+            .order_by(Doctor.id.desc())
+            .all()
+        )
+
+        return [
+            {
+                "id": doctor.id,
+                "user_id": user.id,
+                "username": user.username,
+                "email": user.email,
+                "is_active": bool(user.is_active),
+                "full_name": doctor.full_name,
+                "specialization": doctor.specialization,
+                "license_number": doctor.license_number,
+                "phone": doctor.phone,
+                "department": doctor.department,
+            }
+            for doctor, user in doctors
+        ]
+
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to retrieve doctors",
+        ) from exc
+@app.post("/api/doctors", status_code=201)
+def create_doctor(
+    doctor_data: DoctorCreate,
+    current_user: User = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+):
+    username = doctor_data.username.strip()
+    email = str(doctor_data.email).strip().lower()
+    license_number = (
+        doctor_data.license_number.strip()
+        if doctor_data.license_number
+        else None
+    )
+
+    # Kiểm tra username
+    if db.query(User).filter(User.username == username).first():
+        raise HTTPException(
+            status_code=409,
+            detail="Username already exists",
+        )
+
+    # Kiểm tra email
+    if db.query(User).filter(User.email == email).first():
+        raise HTTPException(
+            status_code=409,
+            detail="Email already exists",
+        )
+
+    # Kiểm tra số giấy phép hành nghề nếu có
+    if license_number and (
+        db.query(Doctor)
+        .filter(Doctor.license_number == license_number)
+        .first()
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="License number already exists",
+        )
+
+    try:
+        # Tạo tài khoản đăng nhập
+        user = User(
+            username=username,
+            email=email,
+            password_hash=hash_password(doctor_data.password),
+            role="doctor",
+            is_active=1,
+        )
+
+        db.add(user)
+        db.flush()
+
+        # Tạo hồ sơ bác sĩ liên kết với tài khoản
+        doctor = Doctor(
+            user_id=user.id,
+            full_name=doctor_data.full_name.strip(),
+            specialization=doctor_data.specialization,
+            license_number=license_number,
+            phone=doctor_data.phone,
+            department=doctor_data.department,
+        )
+
+        db.add(doctor)
+        db.commit()
+
+        db.refresh(user)
+        db.refresh(doctor)
+
+        return {
+            "message": "Doctor created successfully",
+            "doctor": {
+                "id": doctor.id,
+                "user_id": user.id,
+                "username": user.username,
+                "email": user.email,
+                "full_name": doctor.full_name,
+                "specialization": doctor.specialization,
+                "license_number": doctor.license_number,
+                "phone": doctor.phone,
+                "department": doctor.department,
+            },
+        }
+
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to create doctor",
+        ) from exc
+
+# =========================
+# Update doctor
+# =========================
+@app.put("/api/doctors/{doctor_id}")
+def update_doctor(
+    doctor_id: int,
+    doctor_data: DoctorUpdate,
+    current_user: User = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+):
+    doctor = db.query(Doctor).filter(Doctor.id == doctor_id).first()
+    if doctor is None:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+
+    user = db.query(User).filter(User.id == doctor.user_id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="Doctor account not found")
+
+    email = str(doctor_data.email).strip().lower()
+    existing_email = (
+        db.query(User)
+        .filter(User.email == email, User.id != user.id)
+        .first()
+    )
+    if existing_email:
+        raise HTTPException(status_code=409, detail="Email already exists")
+
+    license_number = (
+        doctor_data.license_number.strip()
+        if doctor_data.license_number and doctor_data.license_number.strip()
+        else None
+    )
+    if license_number:
+        existing_license = (
+            db.query(Doctor)
+            .filter(
+                Doctor.license_number == license_number,
+                Doctor.id != doctor.id,
+            )
+            .first()
+        )
+        if existing_license:
+            raise HTTPException(
+                status_code=409,
+                detail="License number already exists",
+            )
+
+    try:
+        doctor.full_name = doctor_data.full_name.strip()
+        doctor.specialization = doctor_data.specialization
+        doctor.license_number = license_number
+        doctor.phone = doctor_data.phone
+        doctor.department = doctor_data.department
+        user.email = email
+
+        db.commit()
+        db.refresh(doctor)
+        db.refresh(user)
+
+        return {
+            "message": "Doctor updated successfully",
+            "doctor": {
+                "id": doctor.id,
+                "user_id": user.id,
+                "username": user.username,
+                "email": user.email,
+                "is_active": bool(user.is_active),
+                "full_name": doctor.full_name,
+                "specialization": doctor.specialization,
+                "license_number": doctor.license_number,
+                "phone": doctor.phone,
+                "department": doctor.department,
+            },
+        }
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to update doctor",
+        ) from exc
+# =========================
+# Appointment schemas
+# =========================
+
+from pydantic import field_validator
+
+
+class AppointmentCreate(BaseModel):
+    appointment_date: date
+    appointment_time: time
+    reason: Optional[str] = Field(default=None, max_length=2000)
+
+
+class AppointmentStatusUpdate(BaseModel):
+    status: str
+
+
+class AppointmentResponse(BaseModel):
+    id: int
+    patient_id: int
+    patient_name: str
+    doctor_id: int
+    doctor_name: str
+    appointment_date: date
+    appointment_time: time
+    reason: Optional[str] = None
+    notes: Optional[str] = None
+    status: str
+    created_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+# =========================
+# Get appointments
+# =========================
+
+@app.get("/api/appointments", response_model=list[AppointmentResponse])
+def get_appointments(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    query = (
+        db.query(Appointment, Patient, Doctor)
+        .join(Patient, Appointment.patient_id == Patient.id)
+        .join(Doctor, Appointment.doctor_id == Doctor.id)
+    )
+
+    if current_user.role == "admin":
+        pass
+
+    elif current_user.role == "doctor":
+        doctor = (
+            db.query(Doctor)
+            .filter(Doctor.user_id == current_user.id)
+            .first()
+        )
+
+        if doctor is None:
+            return []
+
+        query = query.filter(Appointment.doctor_id == doctor.id)
+
+    elif current_user.role == "patient":
+        patient_account = (
+            db.query(PatientAccount)
+            .filter(PatientAccount.user_id == current_user.id)
+            .first()
+        )
+
+        if patient_account is None:
+            return []
+
+        query = query.filter(
+            Appointment.patient_id == patient_account.patient_id
+        )
+
+    else:
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission to view appointments",
+        )
+
+    rows = query.order_by(
+        Appointment.appointment_date.desc(),
+        Appointment.appointment_time.desc(),
+    ).all()
+
+    result = []
+
+    for appointment, patient, doctor in rows:
+        result.append({
+            "id": appointment.id,
+            "patient_id": patient.id,
+            "patient_name": patient.full_name,
+            "doctor_id": doctor.id,
+            "doctor_name": doctor.full_name,
+            "appointment_date": appointment.appointment_date,
+            "appointment_time": appointment.appointment_time,
+            "reason": appointment.reason,
+            "notes": appointment.notes,
+            "status": appointment.status,
+            "created_at": appointment.created_at,
+        })
+
+    return result
+
+
+# =========================
+# Create appointment
+# Automatically assign a doctor
+# =========================
+
+@app.post(
+    "/api/appointments",
+    response_model=AppointmentResponse,
+    status_code=201,
+)
+def create_appointment(
+    appointment_data: AppointmentCreate,
+    current_user: User = Depends(require_roles("patient")),
+    db: Session = Depends(get_db),
+):
+    # 1. Tìm hồ sơ bệnh nhân
+    patient_account = (
+        db.query(PatientAccount)
+        .filter(PatientAccount.user_id == current_user.id)
+        .first()
+    )
+
+    if patient_account is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Patient profile not found",
+        )
+
+    patient = (
+        db.query(Patient)
+        .filter(Patient.id == patient_account.patient_id)
+        .first()
+    )
+
+    if patient is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Patient profile not found",
+        )
+
+    # 2. Kiểm tra ngày giờ khám
+    now = datetime.now()
+
+    if appointment_data.appointment_date < now.date():
+        raise HTTPException(
+            status_code=422,
+            detail="Appointment date cannot be in the past",
+        )
+
+    if (
+        appointment_data.appointment_date == now.date()
+        and appointment_data.appointment_time
+        <= now.time().replace(tzinfo=None)
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Appointment time must be in the future",
+        )
+
+    # 3. Lấy danh sách bác sĩ có tài khoản đang hoạt động
+    doctors = (
+        db.query(Doctor)
+        .join(User, Doctor.user_id == User.id)
+        .filter(User.is_active.is_(True))
+        .order_by(Doctor.id.asc())
+        .all()
+    )
+
+    if not doctors:
+        raise HTTPException(
+            status_code=409,
+            detail="No active doctors are currently available",
+        )
+
+    # 4. Loại bỏ bác sĩ đã có lịch trùng thời gian
+    available_doctors = []
+
+    for doctor in doctors:
+        conflicting_appointment = (
+            db.query(Appointment.id)
+            .filter(
+                Appointment.doctor_id == doctor.id,
+                Appointment.appointment_date
+                == appointment_data.appointment_date,
+                Appointment.appointment_time
+                == appointment_data.appointment_time,
+                Appointment.status.in_(["Pending", "Confirmed"]),
+            )
+            .first()
+        )
+
+        if conflicting_appointment is None:
+            available_doctors.append(doctor)
+
+    if not available_doctors:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "No doctors are available at the selected date and time. "
+                "Please choose another time."
+            ),
+        )
+
+    # 5. Trong các bác sĩ phù hợp, ưu tiên người có ít lịch đang hoạt động nhất.
+    # Nếu số lượng bằng nhau, chọn bác sĩ có ID nhỏ hơn.
+    doctor_loads = []
+
+    for doctor in available_doctors:
+        active_appointment_count = (
+            db.query(Appointment)
+            .filter(
+                Appointment.doctor_id == doctor.id,
+                Appointment.status.in_(["Pending", "Confirmed"]),
+            )
+            .count()
+        )
+
+        doctor_loads.append(
+            (active_appointment_count, doctor.id, doctor)
+        )
+
+    doctor_loads.sort(key=lambda item: (item[0], item[1]))
+    doctor = doctor_loads[0][2]
+
+    # 6. Tạo lịch hẹn
+    appointment = Appointment(
+        patient_id=patient.id,
+        doctor_id=doctor.id,
+        appointment_date=appointment_data.appointment_date,
+        appointment_time=appointment_data.appointment_time,
+        reason=appointment_data.reason,
+        status="Pending",
+    )
+
+    try:
+        db.add(appointment)
+        db.commit()
+        db.refresh(appointment)
+
+        return {
+            "id": appointment.id,
+            "patient_id": patient.id,
+            "patient_name": patient.full_name,
+            "doctor_id": doctor.id,
+            "doctor_name": doctor.full_name,
+            "appointment_date": appointment.appointment_date,
+            "appointment_time": appointment.appointment_time,
+            "reason": appointment.reason,
+            "notes": appointment.notes,
+            "status": appointment.status,
+            "created_at": appointment.created_at,
+        }
+
+    except SQLAlchemyError as exc:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to create appointment",
+        ) from exc
+# =========================
+# Update appointment status
+# =========================
+
+@app.patch("/api/appointments/{appointment_id}/status")
+def update_appointment_status(
+    appointment_id: int,
+    status_data: AppointmentStatusUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    allowed_statuses = {
+        "Pending",
+        "Confirmed",
+        "Completed",
+        "Cancelled",
+        "Rejected",
+    }
+
+    if status_data.status not in allowed_statuses:
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid appointment status",
+        )
+
+    appointment = (
+        db.query(Appointment)
+        .filter(Appointment.id == appointment_id)
+        .first()
+    )
+
+    if appointment is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Appointment not found",
+        )
+
+    if current_user.role == "admin":
+        allowed_transitions = {
+            "Pending": {"Confirmed", "Rejected", "Cancelled"},
+            "Confirmed": {"Cancelled", "Completed"},
+            "Completed": set(),
+            "Cancelled": set(),
+            "Rejected": set(),
+        }
+
+    elif current_user.role == "doctor":
+        doctor = (
+            db.query(Doctor)
+            .filter(Doctor.user_id == current_user.id)
+            .first()
+        )
+
+        if doctor is None or appointment.doctor_id != doctor.id:
+            raise HTTPException(
+                status_code=403,
+                detail="You can only update your own appointments",
+            )
+
+        allowed_transitions = {
+            "Pending": {"Confirmed", "Rejected"},
+            "Confirmed": {"Completed"},
+            "Completed": set(),
+            "Cancelled": set(),
+            "Rejected": set(),
+        }
+
+    elif current_user.role == "patient":
+        patient_account = (
+            db.query(PatientAccount)
+            .filter(PatientAccount.user_id == current_user.id)
+            .first()
+        )
+
+        if (
+            patient_account is None
+            or appointment.patient_id != patient_account.patient_id
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="You can only update your own appointments",
+            )
+
+        allowed_transitions = {
+            "Pending": {"Cancelled"},
+            "Confirmed": {"Cancelled"},
+            "Completed": set(),
+            "Cancelled": set(),
+            "Rejected": set(),
+        }
+
+    else:
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission to update appointments",
+        )
+
+    permitted = allowed_transitions.get(appointment.status, set())
+
+    if status_data.status not in permitted:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Cannot change appointment status "
+                f"from {appointment.status} to {status_data.status}"
+            ),
+        )
+
+    appointment.status = status_data.status
+
+    try:
+        db.commit()
+
+        return {
+            "message": "Appointment status updated successfully",
+            "appointment_id": appointment.id,
+            "status": appointment.status,
+        }
+
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to update appointment status",
+        ) from exc
