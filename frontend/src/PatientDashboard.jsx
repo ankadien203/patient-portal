@@ -9,15 +9,24 @@ import {
   Clock,
   PlusCircle,
   XCircle,
+  ClipboardList,
 } from "lucide-react";
 
 const API_PATIENTS = "/api/patients";
 const API_DOCTORS = "/api/doctors";
 const API_APPOINTMENTS = "/api/appointments";
+const API_MEDICAL_RECORDS = "/api/medical-records";
+const API_PRESCRIPTIONS = "/api/prescriptions";
+const API_HEALTH_METRICS = "/api/health-metrics";
 
 export default function PatientDashboard({ onLogout }) {
   const [patient, setPatient] = useState(null);
-  const [appointments, setAppointments] = useState([]);
+  const [appointments, setAppointments] = useState([]); 
+  const [medicalRecords, setMedicalRecords] = useState([]);
+  const [prescriptions, setPrescriptions] = useState([]);
+  const [healthMetrics, setHealthMetrics] = useState([]);
+
+  const [loadingMedical, setLoadingMedical] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [loadingAppointments, setLoadingAppointments] = useState(false);
@@ -79,6 +88,22 @@ export default function PatientDashboard({ onLogout }) {
     }
   }, [request]);
 
+const loadMedicalRecords = useCallback(async () => {
+  setLoadingMedical(true);
+
+  try {
+    const data = await request(API_MEDICAL_RECORDS);
+
+    setMedicalRecords(
+      Array.isArray(data) ? data : data.items || []
+    );
+  } catch (e) {
+    setError(e.message || "Không thể tải lịch sử khám bệnh.");
+  } finally {
+    setLoadingMedical(false);
+  }
+}, [request]);
+
   useEffect(() => {
     let active = true;
 
@@ -92,10 +117,12 @@ export default function PatientDashboard({ onLogout }) {
       setError("");
 
       try {
-        const [patientData, appointmentData] = await Promise.all([
-  request(API_PATIENTS),
-  request(API_APPOINTMENTS),
-]);
+const [patientData, appointmentData, medicalRecordData] =
+  await Promise.all([
+    request(API_PATIENTS),
+    request(API_APPOINTMENTS),
+    request(API_MEDICAL_RECORDS),
+  ]);
         if (!active) return;
 
         const patientList = Array.isArray(patientData)
@@ -110,16 +137,16 @@ export default function PatientDashboard({ onLogout }) {
 
         setPatient(patientList[0]);
 
-        setDoctors(
-          Array.isArray(doctorData)
-            ? doctorData
-            : doctorData.items || []
-        );
-
         setAppointments(
           Array.isArray(appointmentData)
             ? appointmentData
             : appointmentData.items || []
+        );
+        
+        setMedicalRecords(
+          Array.isArray(medicalRecordData)
+            ? medicalRecordData
+            : medicalRecordData.items || []
         );
       } catch (e) {
         if (active) {
@@ -433,6 +460,82 @@ export default function PatientDashboard({ onLogout }) {
                 </div>
               )}
             </section>
+          
+
+{/* LỊCH SỬ KHÁM BỆNH */}
+<section style={styles.card}>
+  <div style={styles.sectionTitle}>
+    <ClipboardList size={26} />
+    <h2>Lịch sử khám bệnh</h2>
+
+    <button
+      type="button"
+      onClick={loadMedicalRecords}
+      style={styles.refreshButton}
+      disabled={loadingMedical}
+      title="Tải lại lịch sử khám bệnh"
+    >
+      <RefreshCw size={17} />
+    </button>
+  </div>
+
+  {loadingMedical ? (
+    <p>Đang tải lịch sử khám bệnh...</p>
+  ) : medicalRecords.length === 0 ? (
+    <p style={styles.hint}>
+      Bạn chưa có hồ sơ khám bệnh nào.
+    </p>
+  ) : (
+    <div style={styles.appointmentList}>
+      {medicalRecords.map((record) => (
+        <article key={record.id} style={styles.appointment}>
+          <div style={styles.appointmentHeader}>
+            <h3>
+              Lần khám #{record.id}
+            </h3>
+
+            <span
+              style={{
+                ...styles.badge,
+                background: "#e6f7ff",
+                color: "#096dd9",
+              }}
+            >
+              Hồ sơ khám bệnh
+            </span>
+          </div>
+
+          <p>
+            <strong>Ngày khám:</strong>{" "}
+            {formatDate(record.created_at)}
+          </p>
+
+          <p>
+            <strong>Lý do khám:</strong>{" "}
+            {record.chief_complaint || "Chưa cập nhật"}
+          </p>
+
+          <p>
+            <strong>Chẩn đoán:</strong>{" "}
+            {record.diagnosis || "Chưa cập nhật"}
+          </p>
+
+          <p>
+            <strong>Hướng điều trị:</strong>{" "}
+            {record.treatment_plan || "Chưa cập nhật"}
+          </p>
+
+          {record.doctor_notes && (
+            <p>
+              <strong>Ghi chú bác sĩ:</strong>{" "}
+              {record.doctor_notes}
+            </p>
+          )}
+        </article>
+      ))}
+    </div>
+  )}
+</section>
           </>
         )}
       </main>

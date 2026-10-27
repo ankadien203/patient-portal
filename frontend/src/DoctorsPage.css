@@ -49,3 +49,78 @@
 .doctors-form-actions { display:flex; justify-content:flex-end; gap:10px; margin-top:24px; padding-top:18px; border-top:1px solid #edf1f4; }
 .doctors-cancel-button { padding:11px 17px; border:1px solid #dce5ea; border-radius:9px; background:#fff; color:#536b7b; font-weight:700; cursor:pointer; }
 @media (max-width:720px) { .doctors-heading { flex-direction:column; } .doctors-form-grid { grid-template-columns:1fr; } .doctors-modal { padding:19px; } .doctors-summary { max-width:none; } }
+
+/* Form hồ sơ bệnh án */
+.doctor-record-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  margin: 24px 0;
+  padding: 24px;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+}
+
+.doctor-form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.doctor-form-group label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #374151;
+}
+
+.doctor-form-group input,
+.doctor-form-group select,
+.doctor-form-group textarea {
+  width: 100%;
+  padding: 12px 14px;
+  font-size: 14px;
+  font-family: inherit;
+  color: #111827;
+  background: #ffffff;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.doctor-form-group textarea {
+  min-height: 100px;
+  resize: vertical;
+}
+
+.doctor-form-group input:focus,
+.doctor-form-group select:focus,
+.doctor-form-group textarea:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.doctor-form-group small {
+  color: #6b7280;
+  font-size: 13px;
+}
+
+.doctor-record-form button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.doctor-record-form button {
+  align-self: flex-start;
+}
+
+@media (max-width: 768px) {
+  .doctor-record-form {
+    padding: 16px;
+  }
+
+  .doctor-record-form button {
+    width: 100%;
+  }
+}

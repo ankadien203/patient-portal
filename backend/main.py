@@ -5,15 +5,33 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
+from sqlalchemy import or_
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
-
+from pydantic import BaseModel
+from typing import Optional
+from datetime import date, time
 from database import get_db
 from auth import get_current_user, require_roles
-from models import Patient, User, Doctor, PatientAccount, DoctorPatient, Appointment
+from models import (
+    Patient,
+    User,
+    Doctor,
+    PatientAccount,
+    DoctorPatient,
+    Appointment,
+    MedicalRecord,
+    MedicalDocument,
+    Prescription,
+    HealthMetric,
+)
 from fastapi import Depends, FastAPI, HTTPException
 from sqlalchemy.orm import Session
+import os
+from pathlib import Path
 
+from fastapi import HTTPException
+from fastapi.responses import FileResponse
 from auth import create_access_token, verify_password, hash_password
 from models import User
 from schemas import LoginRequest, TokenResponse
@@ -69,6 +87,12 @@ class DoctorUpdate(BaseModel):
             raise ValueError("Full name cannot be blank")
         return value
 
+class MedicalRecordCreate(BaseModel):
+    appointment_id: int
+    chief_complaint: Optional[str] = None
+    diagnosis: Optional[str] = None
+    treatment_plan: Optional[str] = None
+    doctor_notes: Optional[str] = None
 
 class PatientRegister(BaseModel):
     username: str = Field(min_length=3, max_length=50)
@@ -1126,3 +1150,573 @@ def update_appointment_status(
             status_code=500,
             detail="Failed to update appointment status",
         ) from exc
+from pydantic import BaseModel
+from datetime import datetime
+from fastapi import HTTPException, Depends
+from sqlalchemy.orm import Session
+@app.get("/api/medical-records")
+def get_medical_records(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    # Lấy danh sách hồ sơ khám bệnh
+    query = db.query(MedicalRecord)
+
+    # Admin được xem tất cả hồ sơ
+    if current_user.role == "admin":
+        pass
+
+    # Bệnh nhân chỉ được xem hồ sơ của mình
+    elif current_user.role == "patient":
+        patient_account = (
+            db.query(PatientAccount)
+            .filter(PatientAccount.user_id == current_user.id)
+            .first()
+        )
+
+        if not patient_account:
+            return []
+
+        query = query.filter(
+            or_(
+                MedicalRecord.doctor_id == doctor.id,
+                MedicalRecord.patient_id.in_(assigned_patient_ids),
+            )
+        )
+
+    # Bác sĩ chỉ được xem hồ sơ của bệnh nhân được phân công
+    elif current_user.role == "doctor":
+        doctor = (
+            db.query(Doctor)
+            .filter(Doctor.user_id == current_user.id)
+            .first()
+        )
+
+        if not doctor:
+            return []
+
+        assigned_patient_ids = (
+            db.query(DoctorPatient.patient_id)
+            .filter(DoctorPatient.doctor_id == doctor.id)
+            .subquery()
+        )
+
+        query = query.filter(
+            MedicalRecord.patient_id.in_(assigned_patient_ids)
+        )
+
+    else:
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission to view medical records",
+        )
+
+    records = (
+        query.order_by(MedicalRecord.created_at.desc())
+        .all()
+    )
+
+    return [
+        {
+            "id": record.id,
+            "patient_id": record.patient_id,
+            "doctor_id": record.doctor_id,
+            "appointment_id": record.appointment_id,
+            "chief_complaint": record.chief_complaint,
+            "diagnosis": record.diagnosis,
+            "treatment_plan": record.treatment_plan,
+            "doctor_notes": record.doctor_notes,
+            "created_at": record.created_at,
+        }
+        for record in records
+    ]
+@app.get("/api/medical-records/{record_id}")
+def get_medical_record_detail(
+    record_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    record = (
+        db.query(MedicalRecord)
+        .filter(MedicalRecord.id == record_id)
+        .first()
+    )
+
+    if not record:
+        raise HTTPException(
+            status_code=404,
+            detail="Medical record not found",
+        )
+
+    # Admin được xem tất cả hồ sơ
+    if current_user.role == "admin":
+        pass
+
+    # Bệnh nhân chỉ xem hồ sơ của mình
+    elif current_user.role == "patient":
+        patient_account = (
+            db.query(PatientAccount)
+            .filter(PatientAccount.user_id == current_user.id)
+            .first()
+        )
+
+        if (
+            not patient_account
+            or patient_account.patient_id != record.patient_id
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="You cannot access this medical record",
+            )
+
+    # Bác sĩ chỉ xem hồ sơ của bệnh nhân được phân công
+    elif current_user.role == "doctor":
+        doctor = (
+            db.query(Doctor)
+            .filter(Doctor.user_id == current_user.id)
+            .first()
+        )
+
+        if not doctor:
+            raise HTTPException(
+                status_code=403,
+                detail="Doctor account not found",
+            )
+
+        assignment = (
+            db.query(DoctorPatient)
+            .filter(
+                DoctorPatient.doctor_id == doctor.id,
+                DoctorPatient.patient_id == record.patient_id,
+            )
+            .first()
+        )
+
+        if not assignment:
+            raise HTTPException(
+                status_code=403,
+                detail="You cannot access this medical record",
+            )
+
+    else:
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission",
+        )
+
+    return {
+        "id": record.id,
+        "patient_id": record.patient_id,
+        "doctor_id": record.doctor_id,
+        "appointment_id": record.appointment_id,
+        "chief_complaint": record.chief_complaint,
+        "diagnosis": record.diagnosis,
+        "treatment_plan": record.treatment_plan,
+        "doctor_notes": record.doctor_notes,
+        "created_at": record.created_at,
+    }
+@app.get("/api/medical-records/{record_id}/documents")
+def get_medical_documents(
+    record_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    record = (
+        db.query(MedicalRecord)
+        .filter(MedicalRecord.id == record_id)
+        .first()
+    )
+
+    if not record:
+        raise HTTPException(
+            status_code=404,
+            detail="Medical record not found",
+        )
+
+    # Kiểm tra quyền truy cập hồ sơ
+    if current_user.role == "patient":
+        account = (
+            db.query(PatientAccount)
+            .filter(PatientAccount.user_id == current_user.id)
+            .first()
+        )
+
+        if not account or account.patient_id != record.patient_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+    elif current_user.role == "doctor":
+        doctor = (
+            db.query(Doctor)
+            .filter(Doctor.user_id == current_user.id)
+            .first()
+        )
+
+        if not doctor:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        assignment = (
+            db.query(DoctorPatient)
+            .filter(
+                DoctorPatient.doctor_id == doctor.id,
+                DoctorPatient.patient_id == record.patient_id,
+            )
+            .first()
+        )
+
+        if not assignment:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+    elif current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    documents = (
+        db.query(MedicalDocument)
+        .filter(MedicalDocument.medical_record_id == record_id)
+        .order_by(MedicalDocument.created_at.desc())
+        .all()
+    )
+
+    return [
+        {
+            "id": document.id,
+            "medical_record_id": document.medical_record_id,
+            "document_type": document.document_type,
+            "file_name": document.file_name,
+            "mime_type": document.mime_type,
+            "file_size": document.file_size,
+            "created_at": document.created_at,
+        }
+        for document in documents
+    ]
+@app.get("/api/medical-documents/{document_id}/download")
+def download_medical_document(
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    # Tìm tài liệu
+    document = (
+        db.query(MedicalDocument)
+        .filter(MedicalDocument.id == document_id)
+        .first()
+    )
+
+    if not document:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found",
+        )
+
+    # Lấy hồ sơ khám bệnh chứa tài liệu
+    record = (
+        db.query(MedicalRecord)
+        .filter(MedicalRecord.id == document.medical_record_id)
+        .first()
+    )
+
+    if not record:
+        raise HTTPException(
+            status_code=404,
+            detail="Medical record not found",
+        )
+
+    # Kiểm tra quyền truy cập
+    if current_user.role == "patient":
+        account = (
+            db.query(PatientAccount)
+            .filter(PatientAccount.user_id == current_user.id)
+            .first()
+        )
+
+        if not account or account.patient_id != record.patient_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+    elif current_user.role == "doctor":
+        doctor = (
+            db.query(Doctor)
+            .filter(Doctor.user_id == current_user.id)
+            .first()
+        )
+
+        if not doctor:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        assignment = (
+            db.query(DoctorPatient)
+            .filter(
+                DoctorPatient.doctor_id == doctor.id,
+                DoctorPatient.patient_id == record.patient_id,
+            )
+            .first()
+        )
+
+        if not assignment:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+    elif current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Xác định đường dẫn lưu file
+    storage_root = Path(__file__).resolve().parent / "medical_files"
+    file_path = (storage_root / document.storage_key).resolve()
+
+    # Ngăn truy cập file bên ngoài thư mục lưu trữ
+    if not file_path.is_relative_to(storage_root.resolve()):
+        raise HTTPException(status_code=400, detail="Invalid file path")
+
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="PDF file not found")
+
+    # Chỉ cho phép tải PDF
+    if document.mime_type != "application/pdf":
+        raise HTTPException(status_code=400, detail="Only PDF files are allowed")
+
+    return FileResponse(
+        path=str(file_path),
+        media_type="application/pdf",
+        filename=Path(document.file_name).name,
+        content_disposition_type="attachment",
+    )
+@app.get("/api/prescriptions")
+def get_prescriptions(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    query = db.query(Prescription).join(
+        MedicalRecord,
+        Prescription.medical_record_id == MedicalRecord.id,
+    )
+
+    # Admin xem tất cả đơn thuốc
+    if current_user.role == "admin":
+        pass
+
+    # Bệnh nhân chỉ xem đơn thuốc của mình
+    elif current_user.role == "patient":
+        account = (
+            db.query(PatientAccount)
+            .filter(PatientAccount.user_id == current_user.id)
+            .first()
+        )
+
+        if not account:
+            return []
+
+        query = query.filter(
+            MedicalRecord.patient_id == account.patient_id
+        )
+
+    # Bác sĩ chỉ xem đơn thuốc của bệnh nhân được phân công
+    elif current_user.role == "doctor":
+        doctor = (
+            db.query(Doctor)
+            .filter(Doctor.user_id == current_user.id)
+            .first()
+        )
+
+        if not doctor:
+            return []
+
+        assigned_patient_ids = (
+            db.query(DoctorPatient.patient_id)
+            .filter(DoctorPatient.doctor_id == doctor.id)
+            .subquery()
+        )
+
+        query = query.filter(
+            MedicalRecord.patient_id.in_(assigned_patient_ids)
+        )
+
+    else:
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission to view prescriptions",
+        )
+
+    prescriptions = query.order_by(
+        Prescription.created_at.desc()
+    ).all()
+
+    return [
+        {
+            "id": item.id,
+            "medical_record_id": item.medical_record_id,
+            "medication_name": item.medication_name,
+            "dosage": item.dosage,
+            "frequency": item.frequency,
+            "duration": item.duration,
+            "instructions": item.instructions,
+            "created_at": item.created_at,
+        }
+        for item in prescriptions
+    ]
+@app.get("/api/health-metrics")
+def get_health_metrics(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    query = db.query(HealthMetric)
+
+    # Admin xem tất cả chỉ số
+    if current_user.role == "admin":
+        pass
+
+    # Bệnh nhân chỉ xem chỉ số của mình
+    elif current_user.role == "patient":
+        account = (
+            db.query(PatientAccount)
+            .filter(PatientAccount.user_id == current_user.id)
+            .first()
+        )
+
+        if not account:
+            return []
+
+        query = query.filter(
+            HealthMetric.patient_id == account.patient_id
+        )
+
+    # Bác sĩ chỉ xem chỉ số của bệnh nhân được phân công
+    elif current_user.role == "doctor":
+        doctor = (
+            db.query(Doctor)
+            .filter(Doctor.user_id == current_user.id)
+            .first()
+        )
+
+        if not doctor:
+            return []
+
+        assigned_patient_ids = (
+            db.query(DoctorPatient.patient_id)
+            .filter(DoctorPatient.doctor_id == doctor.id)
+            .subquery()
+        )
+
+        query = query.filter(
+            HealthMetric.patient_id.in_(assigned_patient_ids)
+        )
+
+    else:
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission to view health metrics",
+        )
+
+    metrics = query.order_by(
+        HealthMetric.measured_at.desc()
+    ).all()
+
+    return [
+        {
+            "id": item.id,
+            "patient_id": item.patient_id,
+            "medical_record_id": item.medical_record_id,
+            "metric_type": item.metric_type,
+            "value": float(item.value),
+            "unit": item.unit,
+            "secondary_value": (
+                float(item.secondary_value)
+                if item.secondary_value is not None
+                else None
+            ),
+            "measured_at": item.measured_at,
+            "source": item.source,
+        }
+        for item in metrics
+    ]
+@app.post("/api/medical-records")
+def create_medical_record(
+    data: MedicalRecordCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    # Chỉ bác sĩ mới được tạo hồ sơ khám bệnh
+    if current_user.role != "doctor":
+        raise HTTPException(
+            status_code=403,
+            detail="Only doctors can create medical records",
+        )
+
+    # Tìm thông tin bác sĩ đang đăng nhập
+    doctor = (
+        db.query(Doctor)
+        .filter(Doctor.user_id == current_user.id)
+        .first()
+    )
+
+    if not doctor:
+        raise HTTPException(
+            status_code=404,
+            detail="Doctor profile not found",
+        )
+
+    # Tìm lịch hẹn cần lập hồ sơ
+    appointment = (
+        db.query(Appointment)
+        .filter(Appointment.id == data.appointment_id)
+        .first()
+    )
+
+    if not appointment:
+        raise HTTPException(
+            status_code=404,
+            detail="Appointment not found",
+        )
+
+    # Chỉ bác sĩ được phân công mới được lập hồ sơ
+    if appointment.doctor_id != doctor.id:
+        raise HTTPException(
+            status_code=403,
+            detail="You are not assigned to this appointment",
+        )
+
+    # Chỉ lập hồ sơ cho lịch hẹn đã hoàn thành
+    if appointment.status != "Completed":
+        raise HTTPException(
+            status_code=400,
+            detail="Appointment must be completed first",
+        )
+
+    # Mỗi lịch hẹn chỉ có một hồ sơ
+    existing_record = (
+        db.query(MedicalRecord)
+        .filter(
+            MedicalRecord.appointment_id == appointment.id
+        )
+        .first()
+    )
+
+    if existing_record:
+        raise HTTPException(
+            status_code=409,
+            detail="Medical record already exists for this appointment",
+        )
+
+    # Tạo hồ sơ, lấy patient_id và doctor_id từ lịch hẹn
+    record = MedicalRecord(
+        appointment_id=appointment.id,
+        patient_id=appointment.patient_id,
+        doctor_id=doctor.id,
+        chief_complaint=data.chief_complaint,
+        diagnosis=data.diagnosis,
+        treatment_plan=data.treatment_plan,
+        doctor_notes=data.doctor_notes,
+    )
+
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+
+    return {
+        "message": "Medical record created successfully",
+        "id": record.id,
+        "appointment_id": record.appointment_id,
+        "patient_id": record.patient_id,
+        "doctor_id": record.doctor_id,
+        "chief_complaint": record.chief_complaint,
+        "diagnosis": record.diagnosis,
+        "treatment_plan": record.treatment_plan,
+        "doctor_notes": record.doctor_notes,
+        "created_at": record.created_at,
+    }
