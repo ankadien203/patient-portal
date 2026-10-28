@@ -118,12 +118,14 @@ export default function DoctorDashboard({ onLogout }) {
     }
   }
 
-  useEffect(() => {
+  
+useEffect(() => {
     loadPatients();
     loadAppointments();
-    // Chỉ tải dữ liệu ban đầu khi component được tạo.
+    loadMedicalRecords();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+}, []);
+
 
   useEffect(() => {
     if (activePage === "records") loadMedicalRecords();
@@ -293,13 +295,157 @@ export default function DoctorDashboard({ onLogout }) {
 
     const today = new Date();
     const todayString = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-    return <>
-      <section className="doctor-welcome"><div><p className="doctor-eyebrow">KHÔNG GIAN LÀM VIỆC BÁC SĨ</p><h1>Tổng quan</h1><p>Chào mừng bạn quay lại. Đây là tổng quan công việc của bạn.</p></div><div className="doctor-date"><CalendarDays size={18} />{today.toLocaleDateString("vi-VN")}</div></section>
-      <section className="doctor-stats-grid"><StatCard icon={Users} title="Bệnh nhân được phân công" value={loading ? "…" : error ? "—" : patients.length} note="Dữ liệu từ hệ thống" type="teal" /><StatCard icon={CalendarDays} title="Lịch khám hôm nay" value={appointmentsLoading ? "…" : appointments.filter((a) => a.appointment_date === todayString).length} note="Lịch hẹn trong ngày" type="blue" /><StatCard icon={ClipboardList} title="Hồ sơ bệnh án" value={medicalRecords.length} note="Hồ sơ truy cập được" type="purple" /><StatCard icon={Clock3} title="Lịch hẹn cần xử lý" value={appointments.filter((a) => a.status === "Pending").length} note="Đang chờ bạn xử lý" type="orange" /></section>
-      <section className="doctor-panel"><div className="doctor-panel-heading"><div><h2>Bệnh nhân được phân công</h2><p>Thông tin được tải trực tiếp từ backend</p></div><button type="button" className="doctor-link-button" onClick={() => setActivePage("patients")}>Xem danh sách <ArrowUpRight size={16} /></button></div>{renderPatientsTable()}</section>
-      <section className="doctor-panel"><div className="doctor-panel-heading"><div><h2>Lịch khám gần đây</h2><p>Các lịch hẹn được phân công cho bạn</p></div><button type="button" className="doctor-link-button" onClick={() => setActivePage("appointments")}>Xem lịch khám <ArrowUpRight size={16} /></button></div><div className="doctor-appointment-summary">{appointments.slice(0, 3).map((item) => <div className="doctor-appointment-summary-item" key={item.id}><div><strong>{item.patient_name || `Bệnh nhân #${item.patient_id}`}</strong><span>{formatDate(item.appointment_date)} · {formatTime(item.appointment_time)}</span></div><span className={`doctor-status ${appointmentStatusClass(item.status)}`}>{appointmentStatusLabel(item.status)}</span></div>)}{appointments.length === 0 && <p className="doctor-secondary-text">{appointmentsError || "Chưa có lịch hẹn."}</p>}</div></section>
-      <section className="doctor-notice"><CheckCircle2 size={20} /><div><strong>Hệ thống xác thực đã được tích hợp</strong><p>Danh sách bệnh nhân, lịch khám và hồ sơ bệnh án được tải từ backend theo quyền tài khoản đang đăng nhập.</p></div></section>
-    </>;
+   
+return (
+    <>
+      <section className="doctor-welcome">
+        <div>
+          <p className="doctor-eyebrow">KHÔNG GIAN LÀM VIỆC BÁC SĨ</p>
+          <h1>Tổng quan</h1>
+          <p>Chào mừng bạn quay lại. Đây là tổng quan công việc của bạn.</p>
+        </div>
+
+        <div className="doctor-date">
+          <CalendarDays size={18} />
+          {today.toLocaleDateString("vi-VN")}
+        </div>
+      </section>
+
+      <section className="doctor-stats-grid">
+        <StatCard
+          icon={Users}
+          title="Bệnh nhân được phân công"
+          value={loading ? "…" : error ? "—" : patients.length}
+          note={error ? "Không thể tải dữ liệu" : "Bệnh nhân được phân công"}
+          type="teal"
+        />
+
+        <StatCard
+          icon={CalendarDays}
+          title="Lịch khám hôm nay"
+          value={
+            appointmentsLoading
+              ? "…"
+              : appointmentsError
+                ? "—"
+                : appointments.filter(
+                    (a) => a.appointment_date === todayString
+                  ).length
+          }
+          note={appointmentsError ? "Không thể tải dữ liệu" : "Lịch hẹn trong ngày"}
+          type="blue"
+        />
+
+        <StatCard
+          icon={ClipboardList}
+          title="Hồ sơ bệnh án"
+          value={
+            recordsLoading
+              ? "…"
+              : recordsError
+                ? "—"
+                : medicalRecords.length
+          }
+          note={recordsError ? "Không thể tải dữ liệu" : "Hồ sơ truy cập được"}
+          type="purple"
+        />
+
+        <StatCard
+          icon={Clock3}
+          title="Lịch hẹn cần xử lý"
+          value={
+            appointmentsLoading
+              ? "…"
+              : appointmentsError
+                ? "—"
+                : appointments.filter((a) => a.status === "Pending").length
+          }
+          note={appointmentsError ? "Không thể tải dữ liệu" : "Đang chờ bạn xử lý"}
+          type="orange"
+        />
+      </section>
+
+      <section className="doctor-panel">
+        <div className="doctor-panel-heading">
+          <div>
+            <h2>Bệnh nhân được phân công</h2>
+            <p>Thông tin được tải trực tiếp từ backend</p>
+          </div>
+
+          <button
+            type="button"
+            className="doctor-link-button"
+            onClick={() => setActivePage("patients")}
+          >
+            Xem danh sách <ArrowUpRight size={16} />
+          </button>
+        </div>
+
+        {renderPatientsTable()}
+      </section>
+
+      <section className="doctor-panel">
+        <div className="doctor-panel-heading">
+          <div>
+            <h2>Lịch khám gần đây</h2>
+            <p>Các lịch hẹn được phân công cho bạn</p>
+          </div>
+
+          <button
+            type="button"
+            className="doctor-link-button"
+            onClick={() => setActivePage("appointments")}
+          >
+            Xem lịch khám <ArrowUpRight size={16} />
+          </button>
+        </div>
+
+        <div className="doctor-appointment-summary">
+          {appointmentsLoading && appointments.length === 0 ? (
+            renderState("Đang tải lịch khám...")
+          ) : appointmentsError && appointments.length === 0 ? (
+            renderState(appointmentsError, true)
+          ) : appointments.length === 0 ? (
+            <p className="doctor-secondary-text">Chưa có lịch hẹn.</p>
+          ) : (
+            appointments.slice(0, 3).map((item) => (
+              <div
+                className="doctor-appointment-summary-item"
+                key={item.id}
+              >
+                <div>
+                  <strong>
+                    {item.patient_name || `Bệnh nhân #${item.patient_id}`}
+                  </strong>
+                  <span>
+                    {formatDate(item.appointment_date)} ·{" "}
+                    {formatTime(item.appointment_time)}
+                  </span>
+                </div>
+
+                <span
+                  className={`doctor-status ${appointmentStatusClass(item.status)}`}
+                >
+                  {appointmentStatusLabel(item.status)}
+                </span>
+              </div>
+            ))
+          )}
+        </div>
+      </section>
+
+      <section className="doctor-notice">
+        <CheckCircle2 size={20} />
+        <div>
+          <strong>Hệ thống xác thực đã được tích hợp</strong>
+          <p>
+            Danh sách bệnh nhân, lịch khám và hồ sơ bệnh án được tải từ
+            backend theo quyền tài khoản đang đăng nhập.
+          </p>
+        </div>
+      </section>
+    </>
+);
   }
 
   return <div className="doctor-layout">

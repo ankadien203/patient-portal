@@ -1159,7 +1159,7 @@ def get_medical_records(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    # Lấy danh sách hồ sơ khám bệnh
+    # Lấy danh sách hồ sơ bệnh án
     query = db.query(MedicalRecord)
 
     # Admin được xem tất cả hồ sơ
@@ -1178,13 +1178,11 @@ def get_medical_records(
             return []
 
         query = query.filter(
-            or_(
-                MedicalRecord.doctor_id == doctor.id,
-                MedicalRecord.patient_id.in_(assigned_patient_ids),
-            )
+            MedicalRecord.patient_id == patient_account.patient_id
         )
 
-    # Bác sĩ chỉ được xem hồ sơ của bệnh nhân được phân công
+    # Bác sĩ được xem hồ sơ do mình lập
+    # hoặc hồ sơ của bệnh nhân được phân công
     elif current_user.role == "doctor":
         doctor = (
             db.query(Doctor)
@@ -1202,7 +1200,10 @@ def get_medical_records(
         )
 
         query = query.filter(
-            MedicalRecord.patient_id.in_(assigned_patient_ids)
+            or_(
+                MedicalRecord.doctor_id == doctor.id,
+                MedicalRecord.patient_id.in_(assigned_patient_ids),
+            )
         )
 
     else:
@@ -1211,10 +1212,9 @@ def get_medical_records(
             detail="You do not have permission to view medical records",
         )
 
-    records = (
-        query.order_by(MedicalRecord.created_at.desc())
-        .all()
-    )
+    records = query.order_by(
+        MedicalRecord.created_at.desc()
+    ).all()
 
     return [
         {
@@ -1230,6 +1230,7 @@ def get_medical_records(
         }
         for record in records
     ]
+
 @app.get("/api/medical-records/{record_id}")
 def get_medical_record_detail(
     record_id: int,

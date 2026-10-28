@@ -1,7 +1,8 @@
 import {
   HeartPulse, LayoutDashboard, Users, Stethoscope, CalendarDays,
-  BrainCircuit, Settings, Bell, Search, Clock3, CheckCircle2,
-  CircleAlert, ArrowUpRight, Menu, LogOut, RefreshCw, Check, X, Filter,
+BrainCircuit, Settings, Bell, Search, Clock3, CheckCircle2,
+CircleAlert, ArrowUpRight, Menu, LogOut, RefreshCw, Check, X, Filter,
+ClipboardList, Eye, ChevronDown,
 } from "lucide-react";
 import "./AdminDashboard.css";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -36,6 +37,11 @@ function AdminDashboard() {
   const [updatingAppointmentId, setUpdatingAppointmentId] = useState(null);
   const [loadingOverview, setLoadingOverview] = useState(true);
   const [overviewError, setOverviewError] = useState("");
+  const [medicalRecords, setMedicalRecords] = useState([]);
+const [loadingRecords, setLoadingRecords] = useState(false);
+const [recordsError, setRecordsError] = useState("");
+const [recordSearch, setRecordSearch] = useState("");
+const [selectedRecord, setSelectedRecord] = useState(null);
 
   const loadOverview = useCallback(async () => {
     setLoadingOverview(true);
@@ -96,6 +102,44 @@ function AdminDashboard() {
     }
   }, []);
 
+const loadMedicalRecords = useCallback(async () => {
+  setLoadingRecords(true);
+  setRecordsError("");
+
+  try {
+    const token = sessionStorage.getItem("access_token");
+
+    if (!token) {
+      throw new Error("Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.");
+    }
+
+    const response = await fetch("/api/medical-records", {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    const result = await response.json().catch(() => null);
+
+    if (!response.ok) {
+      throw new Error(
+        result?.detail ||
+        `Không tải được hồ sơ bệnh án (HTTP ${response.status}).`
+      );
+    }
+
+    if (!Array.isArray(result)) {
+      throw new Error("Dữ liệu hồ sơ bệnh án không đúng định dạng.");
+    }
+
+    setMedicalRecords(result);
+  } catch (err) {
+    setRecordsError(err.message || "Không thể tải hồ sơ bệnh án.");
+  } finally {
+    setLoadingRecords(false);
+  }
+}, []);
+
   const updateAppointmentStatus = useCallback(async (appointment, status) => {
     const id = appointment.id ?? appointment.appointment_id;
     if (id == null) {
@@ -125,9 +169,21 @@ function AdminDashboard() {
   }, [loadAppointments]);
 
   useEffect(() => {
-    if (activePage === "overview") loadOverview();
-    if (activePage === "appointments") loadAppointments();
-  }, [activePage, loadOverview, loadAppointments]);
+  if (activePage === "overview") loadOverview();
+
+  if (activePage === "appointments") {
+    loadAppointments();
+  }
+
+  if (activePage === "medical-records") {
+    loadMedicalRecords();
+  }
+}, [
+  activePage,
+  loadOverview,
+  loadAppointments,
+  loadMedicalRecords,
+]);
 
   const activeDoctors = useMemo(
     () => doctors.filter((doctor) => doctor.is_active === true || doctor.is_active === 1).length,
@@ -174,6 +230,16 @@ function AdminDashboard() {
           <button type="button" className={`admin-nav-link ${activePage === "patients" ? "active" : ""}`} onClick={() => setActivePage("patients")}><Users size={19} /><span>Bệnh nhân</span></button>
           <button type="button" className={`admin-nav-link ${activePage === "doctors" ? "active" : ""}`} onClick={() => setActivePage("doctors")}><Stethoscope size={19} /><span>Bác sĩ</span></button>
           <button type="button" className="admin-nav-link" onClick={() => setActivePage("appointments")}><CalendarDays size={19} /><span>Lịch khám</span></button>
+          <button
+  type="button"
+  className={`admin-nav-link ${
+    activePage === "medical-records" ? "active" : ""
+  }`}
+  onClick={() => setActivePage("medical-records")}
+>
+  <ClipboardList size={19} />
+  <span>Hồ sơ bệnh án</span>
+</button>
           <button type="button" className="admin-nav-link" onClick={() => setActivePage("ai-triage")}><BrainCircuit size={19} /><span>AI Triage</span><span className="nav-tag">AI</span></button>
         </nav>
         <div className="sidebar-bottom">
@@ -192,8 +258,237 @@ function AdminDashboard() {
         </header>
 
         <div className="admin-content">
-          {activePage === "patients" ? <PatientsPage /> :
-           activePage === "doctors" ? <DoctorsPage /> :
+          {activePage === "medical-records" ? (
+  <section className="panel" style={{ padding: 24 }}>
+    <div className="panel-heading">
+      <div>
+        <h2>Hồ sơ bệnh án toàn bệnh viện</h2>
+        <p>Tra cứu hồ sơ, chẩn đoán và kế hoạch điều trị</p>
+      </div>
+
+      <button
+        type="button"
+        className="date-button"
+        onClick={loadMedicalRecords}
+        disabled={loadingRecords}
+      >
+        <RefreshCw size={16} />
+        {loadingRecords ? "Đang tải..." : "Làm mới"}
+      </button>
+    </div>
+
+    <div className="stats-grid" style={{ margin: "18px 0" }}>
+      <article className="stat-card">
+        <div className="stat-title">Tổng số hồ sơ</div>
+        <div className="stat-value">
+          {loadingRecords ? "…" : medicalRecords.length}
+        </div>
+      </article>
+    </div>
+
+    <label
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        border: "1px solid #dbe3ee",
+        borderRadius: 8,
+        padding: "10px 12px",
+        marginBottom: 18,
+      }}
+    >
+      <Search size={17} />
+
+      <input
+        aria-label="Tìm hồ sơ bệnh án"
+        value={recordSearch}
+        onChange={(e) => setRecordSearch(e.target.value)}
+        placeholder="Tìm theo mã hồ sơ, bệnh nhân hoặc chẩn đoán..."
+        style={{ border: 0, outline: 0, width: "100%" }}
+      />
+    </label>
+
+    {recordsError && (
+      <div className="doctors-error" role="alert">
+        {recordsError}
+        <button type="button" onClick={loadMedicalRecords}>
+          Thử lại
+        </button>
+      </div>
+    )}
+
+    {loadingRecords ? (
+      <div className="doctors-empty">Đang tải hồ sơ bệnh án...</div>
+    ) : !recordsError && medicalRecords.length === 0 ? (
+      <div className="doctors-empty">
+        Chưa có hồ sơ bệnh án hoặc API không trả về hồ sơ nào.
+      </div>
+    ) : (
+      <div className="table-scroll">
+        <table className="appointment-table">
+          <thead>
+            <tr>
+              <th>MÃ HỒ SƠ</th>
+              <th>MÃ BỆNH NHÂN</th>
+              <th>MÃ BÁC SĨ</th>
+              <th>CHẨN ĐOÁN</th>
+              <th>NGÀY LẬP</th>
+              <th>CHI TIẾT</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            {medicalRecords
+              .filter((record) => {
+                const query = recordSearch.trim().toLocaleLowerCase("vi");
+
+                if (!query) return true;
+
+                return [
+                  record.id,
+                  record.patient_id,
+                  record.doctor_id,
+                  record.appointment_id,
+                  record.chief_complaint,
+                  record.diagnosis,
+                  record.treatment_plan,
+                  record.doctor_notes,
+                ].some((value) =>
+                  String(value ?? "")
+                    .toLocaleLowerCase("vi")
+                    .includes(query)
+                );
+              })
+              .map((record) => (
+                <tr key={record.id}>
+                  <td>
+                    <strong>#{record.id}</strong>
+                  </td>
+
+                  <td>BN #{record.patient_id}</td>
+
+                  <td>BS #{record.doctor_id}</td>
+
+                  <td>{record.diagnosis || "Chưa có chẩn đoán"}</td>
+
+                  <td>{formatDate(record.created_at)}</td>
+
+                  <td>
+                    <button
+                      type="button"
+                      className="date-button"
+                      onClick={() =>
+                        setSelectedRecord((current) =>
+                          current?.id === record.id ? null : record
+                        )
+                      }
+                    >
+                      <Eye size={15} />
+                      {selectedRecord?.id === record.id
+                        ? "Thu gọn"
+                        : "Xem hồ sơ"}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+
+            {medicalRecords.filter((record) => {
+              const query = recordSearch.trim().toLocaleLowerCase("vi");
+
+              return (
+                !query ||
+                [
+                  record.id,
+                  record.patient_id,
+                  record.doctor_id,
+                  record.appointment_id,
+                  record.chief_complaint,
+                  record.diagnosis,
+                  record.treatment_plan,
+                  record.doctor_notes,
+                ].some((value) =>
+                  String(value ?? "")
+                    .toLocaleLowerCase("vi")
+                    .includes(query)
+                )
+              );
+            }).length === 0 && (
+              <tr>
+                <td colSpan={6} style={{ textAlign: "center", padding: 24 }}>
+                  Không tìm thấy hồ sơ phù hợp.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    )}
+
+    {selectedRecord && (
+      <section
+        className="panel"
+        style={{
+          marginTop: 24,
+          padding: 20,
+          border: "1px solid #dbe3ee",
+        }}
+      >
+        <div className="panel-heading">
+          <div>
+            <h2>Chi tiết hồ sơ #{selectedRecord.id}</h2>
+            <p>
+              Bệnh nhân #{selectedRecord.patient_id}
+              {" · "}
+              Bác sĩ #{selectedRecord.doctor_id}
+            </p>
+          </div>
+
+          <button
+            type="button"
+            className="date-button"
+            onClick={() => setSelectedRecord(null)}
+          >
+            <X size={15} />
+            Đóng
+          </button>
+        </div>
+
+        <div style={{ display: "grid", gap: 16 }}>
+          <div>
+            <strong>Mã lịch khám</strong>
+            <p>{selectedRecord.appointment_id ?? "Chưa cập nhật"}</p>
+          </div>
+
+          <div>
+            <strong>Lý do khám</strong>
+            <p>{selectedRecord.chief_complaint || "Chưa cập nhật"}</p>
+          </div>
+
+          <div>
+            <strong>Chẩn đoán</strong>
+            <p>{selectedRecord.diagnosis || "Chưa cập nhật"}</p>
+          </div>
+
+          <div>
+            <strong>Kế hoạch điều trị</strong>
+            <p>{selectedRecord.treatment_plan || "Chưa cập nhật"}</p>
+          </div>
+
+          <div>
+            <strong>Ghi chú bác sĩ</strong>
+            <p>{selectedRecord.doctor_notes || "Chưa có ghi chú"}</p>
+          </div>
+
+          <div>
+            <strong>Ngày lập hồ sơ</strong>
+            <p>{formatDate(selectedRecord.created_at)}</p>
+          </div>
+        </div>
+      </section>
+    )}
+  </section>
+) : activePage === "patients" ? <PatientsPage /> :
+   activePage === "doctors" ? <DoctorsPage /> :
            activePage === "appointments" ? (
              <section className="panel" style={{ padding: 24 }}>
                <div className="panel-heading">
